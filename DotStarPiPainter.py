@@ -51,9 +51,9 @@ from PIL import Image
 # CONFIGURABLE STUFF -------------------------------------------------------
 
 num_leds   = 144         # Length of LED strip, in pixels
-pin_go     = board.D22   # GPIO pin numbers for 'go' button,
-pin_next   = board.D17   # previous image, next image and speed +/-.
-pin_prev   = board.D4    # Buttons should connect from these pins to ground.
+pin_go     = board.D23   # GPIO pin numbers for 'go' button,
+pin_next   = board.D22   # previous image, next image and speed +/-.
+pin_prev   = board.D17    # Buttons should connect from these pins to ground.
 pin_faster = board.D23
 pin_slower = board.D24
 vflip      = 'true'      # 'true' if strip input at bottom, else 'false'
@@ -71,14 +71,15 @@ strip     = dotstar.DotStar(board.SCK, board.MOSI, num_leds, brightness=1.0,
 # we pull shenanigans here and also access the SPI bus directly for ultra-
 # fast strip updates with data out of the lightpaint library.
 spi       = busio.SPI(board.SCK, MOSI=board.MOSI)
-path      = '/media/usb'         # USB stick mount point
+path      = '/media/usb1'         # USB stick mount point
 mousefile = '/dev/input/mouse0'  # Mouse device (as positional encoder)
 eventfile = '/dev/input/event0'  # Mouse events accumulate here
 dev       = None                 # None unless mouse is detected
 
 gamma          = (2.8, 2.8, 2.8) # Gamma correction curves for R,G,B
 color_balance  = (128, 255, 180) # Max brightness for R,G,B (white balance)
-power_settings = (1450, 1550)    # Battery avg and peak current
+power = 100
+power_settings = (power, power)    # Battery avg and peak current
 
 # INITIALIZATION -----------------------------------------------------------
 
@@ -106,17 +107,18 @@ for i in range(4):
 for i in range(4 + num_leds * 4, len(ledBuf)):
     ledBuf[i] = 0xFF # Footer bytes
 imgNum     = 0    # Index of currently-active image
-duration   = 2.0  # Image paint time, in seconds
+duration   = 0.1  # Image paint time, in seconds
 filename   = None # List of image files (nothing loaded yet)
 lightpaint = None # LightPaint object for currently-active image (none yet)
+max_image_duration = 60 # image duration in seconds before cycling to the next image
 
 # If a mouse is plugged in, set up epoll for sensing position
-if os.path.exists(mousefile):
-    dev = InputDevice(eventfile)
-    # Register mouse descriptor with epoll
-    epoll = select.epoll()
-    epoll.register(dev.fileno(), select.EPOLLIN)
-    print('Using mouse for positional input')
+#if os.path.exists(mousefile):
+#    dev = InputDevice(eventfile)
+#    # Register mouse descriptor with epoll
+#    epoll = select.epoll()
+#    epoll.register(dev.fileno(), select.EPOLLIN)
+#    print('Using mouse for positional input')
 
 # FUNCTIONS ----------------------------------------------------------------
 
@@ -238,6 +240,7 @@ speed_pixel = int(num_leds * (duration - min_time) / time_range)
 duration    = min_time + time_range * speed_pixel / (num_leds - 1)
 prev_btn    = 0
 rep_time    = 0.2
+image_count = 0
 
 scandir() # USB drive might already be inserted
 signal.signal(signal.SIGUSR1, sigusr1_handler) # USB mount signal
@@ -246,13 +249,26 @@ signal.signal(signal.SIGUSR2, sigusr2_handler) # USB unmount signal
 try:
     while True:
         b = btn()
-        if b == 1 and lightpaint != None:
+        if b == 4 and filename != None:
+            # Next image (if USB drive present)
+            imgNum += 1
+            if imgNum >= len(filename): imgNum = 0
+            lightpaint = loadImage(imgNum)
+            image_count = 0
+            while btn() == 4: continue
+        elif b == 5 and filename != None:
+            power += 200
+            if power > 1500: power = 100
+            power_settings = (power, power)
+            print('Power: ' + str(power))
+            lightpaint = loadImage(imgNum)
+            while btn() == 5: continue
+        elif lightpaint != None:
             # Paint!
             spi.try_lock()
             spi.configure(baudrate=spispeed)
 
             if dev is None: # Time-based
-
                 startTime = time.time()
                 while True:
                     t1      = time.time()
@@ -264,6 +280,13 @@ try:
                     # the source image to render.  Interpolation happens.
                     lightpaint.dither(ledBuf, elapsed / duration)
                     spi.write(ledBuf)
+                image_count += 1
+                if (image_count > (max_image_duration / duration)):
+                    imgNum += 1
+                    if imgNum >= len(filename): imgNum = 0
+                    lightpaint = loadImage(imgNum)
+                    image_count = 0
+
 
             else: # Encoder-based
 
@@ -294,50 +317,6 @@ try:
                 strip.fill(0)
                 strip.show()
 
-        elif b == 2:
-            # Decrease paint duration
-            if speed_pixel > 0:
-                speed_pixel -= 1
-                duration = (min_time + time_range *
-                  speed_pixel / (num_leds - 1))
-            strip[speed_pixel] = (0, 0, 128)
-            strip.show()
-            startTime = time.time()
-            while (btn() == 2 and ((time.time() - startTime) <
-              rep_time)): continue
-            strip.fill(0)
-            strip.show()
-        elif b == 3:
-            # Increase paint duration (up to 10 sec maximum)
-            if speed_pixel < num_leds - 1:
-                speed_pixel += 1
-                duration = (min_time + time_range *
-                  speed_pixel / (num_leds - 1))
-                strip[speed_pixel] = (0, 0, 128)
-                strip.show()
-                startTime = time.time()
-                while (btn() == 3 and ((time.time() - startTime) <
-                  rep_time)): continue
-                strip.fill(0)
-                strip.show()
-        elif b == 4 and filename != None:
-            # Next image (if USB drive present)
-            imgNum += 1
-            if imgNum >= len(filename): imgNum = 0
-            lightpaint = loadImage(imgNum)
-            while btn() == 4: continue
-        elif b == 5 and filename != None:
-            # Previous image (if USB drive present)
-            imgNum -= 1
-            if imgNum < 0: imgNum = len(filename) - 1
-            lightpaint = loadImage(imgNum)
-            while btn() == 5: continue
-        if b > 0 and b == prev_btn:
-            # If button held, accelerate speed selection
-            rep_time *= 0.92
-            if rep_time < 0.01: rep_time = 0.01
-        else:
-            rep_time = 0.2
         prev_btn = b
 
 except KeyboardInterrupt:
@@ -345,3 +324,4 @@ except KeyboardInterrupt:
     strip.fill(0)
     strip.show()
     print('Done!')
+

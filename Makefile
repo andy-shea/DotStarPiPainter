@@ -6,7 +6,7 @@ CFLAGS = -fPIC -Ofast -fomit-frame-pointer -funroll-loops
 all: lightpaint.so
 
 lightpaint.so: lightpaint.o
-	gcc -s -shared -Wl,-soname,liblightpaint.so -o $@ $<
+	gcc -s -shared -I/usr/include/python3.9 -Wl,-soname,liblightpaint.so -o $@ $<
 
 .c.o:
 	$(CC) $(CFLAGS) -c $<

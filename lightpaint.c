@@ -16,7 +16,7 @@
   from Adafruit!
   ------------------------------------------------------------------------*/
 
-#include <python3.5/Python.h>
+#include <python3.9/Python.h>
 
 // DotStar LED power estimates measured & divided from 100 pixels @ 5.1VDC.
 #define mA0  1.25 // LED current when off (driver logic still needs some)
